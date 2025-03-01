@@ -4,12 +4,12 @@ description: A comprehensive tool for interacting with Jira - search, view, crea
 repository: https://github.com/taylorwilsdon/open-webui-tools
 author: @taylorwilsdon
 author_url: https://github.com/taylorwilsdon
-version: 1.0.0
+version: 1.0.1
 changelog:
+  - 1.0.1: Update with PAT support
   - 1.0.0: Initial release with comprehensive Jira integration capabilities
 """
 
-import base64
 import json
 import re
 import datetime
@@ -79,15 +79,24 @@ class JiraApiError(Exception):
 
 
 class Jira:
-    def __init__(self, username: str, password: str, base_url: str):
+    def __init__(self, username: str, password: str, base_url: str, pat: str = ""):
         self.base_url = base_url.rstrip("/")
         self.username = username
         self.password = password
+        self.pat = pat
         self.headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
+        if self.pat:
+            self.headers["Authorization"] = f"Bearer {self.pat}"
         self.api_version = "latest"  # Using Jira API v3 by default
+
+    def _get_auth(self):
+        """Return appropriate auth tuple or None based on authentication method"""
+        if self.pat:
+            return None
+        return (self.username, self.password)
 
     def _handle_response(self, response: requests.Response, operation: str):
         """Handle API response and raise appropriate exceptions"""
@@ -112,7 +121,7 @@ class Jira:
             url,
             params=params,
             headers=self.headers,
-            auth=(self.username, self.password),
+            auth=self._get_auth(),
         )
         return self._handle_response(response, f"get {endpoint}")
 
@@ -122,7 +131,7 @@ class Jira:
             url,
             json=data,
             headers=self.headers,
-            auth=(self.username, self.password),
+            auth=self._get_auth(),
         )
         return self._handle_response(response, f"post to {endpoint}")
 
@@ -132,7 +141,7 @@ class Jira:
             url,
             json=data,
             headers=self.headers,
-            auth=(self.username, self.password),
+            auth=self._get_auth(),
         )
         return self._handle_response(response, f"update {endpoint}")
 
@@ -422,8 +431,9 @@ class Tools:
         self.valves = self.Valves()
 
     class Valves(BaseModel):
-        username: str = Field("", description="Your Jira username or email")
-        password: str = Field("", description="Your Jira password")
+        username: str = Field("", description="Your Jira username or email (leave empty if using PAT)")
+        password: str = Field("", description="Your Jira password (leave empty if using PAT)")
+        pat: str = Field("", description="Your Jira Personal Access Token (leave empty if using username/password)")
         base_url: str = Field(
             "",
             description="Your Jira base URL (e.g., https://your-company.atlassian.net)",
@@ -437,17 +447,28 @@ class Tools:
                 raise ValueError("URL must start with http:// or https://")
             return v
 
+        @validator("pat")
+        def validate_credentials(cls, v, values):
+            if not v and (not values.get("username") or not values.get("password")):
+                raise ValueError("Either PAT or username/password must be provided")
+            return v
+
     def _get_jira_client(self):
         """Initialize and return a Jira client using valve values"""
-        if (
-            not self.valves.username
-            or not self.valves.password
-            or not self.valves.base_url
-        ):
+        if not self.valves.base_url:
             raise ValueError(
-                "Jira credentials not configured. Please provide your username, API key, and base URL."
+                "Jira base URL not configured. Please provide your Jira base URL."
             )
-        return Jira(self.valves.username, self.valves.password, self.valves.base_url)
+        if not self.valves.pat and (not self.valves.username or not self.valves.password):
+            raise ValueError(
+                "Jira credentials not configured. Please provide either username/password or a Personal Access Token."
+            )
+        return Jira(
+            self.valves.username,
+            self.valves.password,
+            self.valves.base_url,
+            self.valves.pat
+        )
 
     async def get_issue(
         self,
