@@ -67,6 +67,8 @@ class EventEmitter:
             formatted_row = [str(cell).replace("|", "\\|") for cell in row]
             table += "|" + "|".join(formatted_row) + "|\n"
 
+        table += "\n"
+
         await self.emit_message(table)
 
 
