@@ -11,9 +11,7 @@ changelog:
 """
 
 import json
-import re
-import datetime
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List
 import requests
 from pydantic import BaseModel, Field, validator
 
