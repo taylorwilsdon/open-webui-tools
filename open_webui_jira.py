@@ -11,7 +11,7 @@ changelog:
 """
 
 import json
-from typing import Any, Awaitable, Callable, Dict, List
+from typing import Any, Awaitable, Callable, Dict, Optional, List
 import requests
 from pydantic import BaseModel, Field, validator
 
@@ -20,38 +20,102 @@ class EventEmitter:
     def __init__(self, event_emitter: Callable[[dict], Awaitable[None]]):
         self.event_emitter = event_emitter
 
-    async def emit_status(self, description: str, done: bool, error: bool = False):
-        icon = "✅" if done and not error else "❌" if error else "🔎"
-        await self.event_emitter(
-            {
-                "data": {
-                    "description": f"{icon} {description}",
-                    "status": "complete" if done else "in_progress",
-                    "done": done,
-                },
-                "type": "status",
-            }
-        )
+    async def emit_status(
+        self, description: str, done: bool, error: bool = False
+    ) -> None:
+        """
+        Emit a status event with a description and completion status.
 
-    async def emit_message(self, content: str):
-        await self.event_emitter({"data": {"content": content}, "type": "message"})
+        Args:
+            description: Text description of the status.
+            done: Whether the process is complete.
+            error: Whether an error occurred during the process.
+        """
+        if error and not done:
+            raise ValueError("Error status must also be marked as done")
 
-    async def emit_source(self, name: str, url: str, content: str, html: bool = False):
-        await self.event_emitter(
-            {
-                "type": "citation",
-                "data": {
-                    "document": [content],
-                    "metadata": [{"source": url, "html": html}],
-                    "source": {"name": name},
-                },
-            }
-        )
+        icon = "✅" if done and not error else "🚫 " if error else "💬"
+
+        try:
+            await self.event_emitter(
+                {
+                    "data": {
+                        "description": f"{icon} {description}",
+                        "status": "complete" if done else "in_progress",
+                        "done": done,
+                    },
+                    "type": "status",
+                }
+            )
+
+        except Exception as e:
+            raise RuntimeError(f"Failed to emit status event: {str(e)}") from e
+
+    async def emit_message(self, content: str) -> None:
+        """
+        Emit a simple message event.
+
+        Args:
+            content: The message content to emit.
+        """
+        if not content:
+            raise ValueError("Message content cannot be empty")
+
+        try:
+            await self.event_emitter({"data": {"content": content}, "type": "message"})
+
+        except Exception as e:
+            raise RuntimeError(f"Failed to emit message event: {str(e)}") from e
+
+    async def emit_source(
+        self, name: str, url: str, content: str, html: bool = False
+    ) -> None:
+        """
+        Emit a citation source event.
+
+        Args:
+            name: The name of the source.
+            url: The URL of the source.
+            content: The content of the citation.
+            html: Whether the content is HTML formatted.
+        """
+        if not name or not url or not content:
+            raise ValueError("Source name, URL, and content are required")
+
+        try:
+            await self.event_emitter(
+                {
+                    "type": "citation",
+                    "data": {
+                        "document": [content],
+                        "metadata": [{"source": url, "html": html}],
+                        "source": {"name": name},
+                    },
+                }
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to emit source event: {str(e)}") from e
 
     async def emit_table(
-        self, headers: List[str], rows: List[List[Any]], title: str = "Results"
-    ):
-        """Emit a formatted table of data"""
+        self,
+        headers: List[str],
+        rows: List[List[Any]],
+        title: Optional[str] = "Results",
+    ) -> None:
+        """
+        Emit a formatted markdown table of data.
+
+        Args:
+            headers: List of column headers for the table.
+            rows: List of rows, where each row is a list of values.
+            title: Optional title for the table, defaults to "Results".
+        """
+        if not headers:
+            raise ValueError("Table must have at least one header")
+
+        if any(len(row) != len(headers) for row in rows):
+            raise ValueError("All rows must have the same number of columns as headers")
+
         # Create markdown table
         table = (
             f"### {title}\n\n|"
@@ -62,11 +126,13 @@ class EventEmitter:
         )
 
         for row in rows:
+            # Convert all cells to strings and escape pipe characters
             formatted_row = [str(cell).replace("|", "\\|") for cell in row]
             table += "|" + "|".join(formatted_row) + "|\n"
 
         table += "\n"
 
+        # Reuse the emit_message method
         await self.emit_message(table)
 
 
@@ -429,9 +495,16 @@ class Tools:
         self.valves = self.Valves()
 
     class Valves(BaseModel):
-        username: str = Field("", description="Your Jira username or email (leave empty if using PAT)")
-        password: str = Field("", description="Your Jira password (leave empty if using PAT)")
-        pat: str = Field("", description="Your Jira Personal Access Token (leave empty if using username/password)")
+        username: str = Field(
+            "", description="Your Jira username or email (leave empty if using PAT)"
+        )
+        password: str = Field(
+            "", description="Your Jira password (leave empty if using PAT)"
+        )
+        pat: str = Field(
+            "",
+            description="Your Jira Personal Access Token (leave empty if using username/password)",
+        )
         base_url: str = Field(
             "",
             description="Your Jira base URL (e.g., https://your-company.atlassian.net)",
@@ -457,7 +530,9 @@ class Tools:
             raise ValueError(
                 "Jira base URL not configured. Please provide your Jira base URL."
             )
-        if not self.valves.pat and (not self.valves.username or not self.valves.password):
+        if not self.valves.pat and (
+            not self.valves.username or not self.valves.password
+        ):
             raise ValueError(
                 "Jira credentials not configured. Please provide either username/password or a Personal Access Token."
             )
@@ -465,7 +540,7 @@ class Tools:
             self.valves.username,
             self.valves.password,
             self.valves.base_url,
-            self.valves.pat
+            self.valves.pat,
         )
 
     async def get_issue(
@@ -490,7 +565,7 @@ class Tools:
 
             # Format and emit issue information
             issue_card = f"""
-### 🎫 {issue['key']}: {issue['title']}
+### 📩 {issue['key']}: {issue['title']}
 
 **Status:** {issue['status']}  
 **Type:** {issue['type']}  
@@ -860,4 +935,3 @@ Issue [{issue_id}]({result['link']}) status has been changed to **{result['new_s
                 f"Failed to get metadata: {str(e)}", True, True
             )
             return f"Error: {str(e)}"
-
