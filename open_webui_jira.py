@@ -496,7 +496,7 @@ class Tools:
 
     class Valves(BaseModel):
         username: str = Field(
-            "", description="Your Jira username or email (leave empty if using PAT)"
+            "", description="Your Jira username (required for Cloud, not needed for Data Center PAT)"
         )
         password: str = Field(
             "", description="Your Jira password (leave empty if using PAT)"
