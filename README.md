@@ -20,40 +20,77 @@ To use this tool, configure your Jira credentials:
 - **Personal Access Token (PAT)** (Recommended)  
 - **Username & Password** (If PAT is not available)  
 
+Note - for self-hosted Jira instances (Jira Server, Jira Data Center) you can use just the PAT + instance hostname. With Jira Cloud, you need to include both the username and the PAT alongside the hostname due to differences in the way they implement token auth. 
+
 ### Example API Calls
 
 #### **Search for Issues**
-```python
+llm
+```
+Please find all open tickets in the DEMO project
+```
+python
+```
 jira.search_issues("project = DEMO AND status = Open")
 ```
 
 #### **Get Issue Details**
-```python
+llm
+```
+Fetch information about DEMO-123
+```
+python
+```
 jira.get_issue("DEMO-123")
 ```
 
 #### **Create an Issue**
-```python
+llm
+```
+Create a new issue in the demo project with a bug report report and summary "Something is broken" with high priority
+```
+python
+```
 jira.create_issue("DEMO", "Bug Report", "Something is broken", "Bug", "High")
 ```
 
 #### **Add a Comment**
-```python
+llm
+```
+Add a comment to DEMO-123 that says "This is a new comment"
+```
+python
+```
 jira.add_comment("DEMO-123", "This is a new comment")
 ```
 
 #### **Assign an Issue**
-```python
+llm
+```
+Assign DEMO-123 to john.doe
+```
+python
+```
 jira.assign_issue("DEMO-123", "john.doe")
 ```
 
 #### **Update Issue Status**
-```python
+llm
+```
+Update DEMO-123 to the In Progress status
+```
+python
+```
 jira.update_status("DEMO-123", "In Progress")
 ```
 
 #### **List Jira Projects**
-```python
+llm
+```
+List all our Jira projects
+```
+python
+```
 jira.list_projects()
 ```
 
