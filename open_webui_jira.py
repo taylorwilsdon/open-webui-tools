@@ -4,33 +4,142 @@ description: A comprehensive tool for interacting with Jira - search, view, crea
 repository: https://github.com/taylorwilsdon/open-webui-tools
 author: @taylorwilsdon
 author_url: https://github.com/taylorwilsdon
-version: 1.0.1
+version: 1.0.3
 changelog:
+  - 1.0.3: Improved date formatting, enhanced HTML content handling, better comment display
+  - 1.0.2: Extensive refactor - simplified logging, fixed duplicate messages, improved formatting
   - 1.0.1: Update with PAT support
   - 1.0.0: Initial release with comprehensive Jira integration capabilities
 """
 
 import json
-from typing import Any, Awaitable, Callable, Dict, Optional, List
+import logging
+from typing import Any, Awaitable, Callable, Dict, Optional, List, Union
+from datetime import datetime
 import requests
 from pydantic import BaseModel, Field, validator
+
+# Simple logging configuration
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+
+# Get logger for this module
+logger = logging.getLogger("jira_tool")
+
+class IssueFormatter:
+    """Helper class to format Jira issues consistently as markdown tables"""
+
+    @staticmethod
+    def format_date(date_str: str) -> str:
+        """Format a date string from Jira API to a more readable format"""
+        if not date_str or date_str == "Unknown":
+            return "Unknown"
+        
+        try:
+            # Clean up the timezone part if it has an extra offset
+            if '+00:00' in date_str and ('+' in date_str.split('+00:00')[1] or '-' in date_str.split('+00:00')[1]):
+                date_str = date_str.split('+00:00')[0] + date_str.split('+00:00')[1]
+
+            # Parse ISO 8601 format
+            dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+            
+            # Format as "Mar 10, 2025 12:34 PM"
+            formatted_date = dt.strftime("%b %d, %Y %I:%M %p")
+                        
+            return formatted_date
+            
+        except (ValueError, TypeError) as e:
+            # Log the error but don't crash
+            logger.debug(f"Date parsing error: {e} for string: {date_str}")
+            # If parsing fails, return the original string
+            return date_str
+
+    @staticmethod
+    def format_issue_details(issue: Dict[str, Any]) -> str:
+        """Format a single issue in Jira-style markdown"""
+        # Define status and priority icons
+        status_icon = "✅" if issue['status'].lower() in ['done', 'closed', 'resolved'] else "🔄" if issue['status'].lower() in ['in progress', 'in review'] else "🆕"
+        priority_icon = "🔥" if issue['priority'].lower() in ['highest', 'high'] else "⚡" if issue['priority'].lower() == 'medium' else "🔽"
+        
+        # Format metadata badges
+        metadata_badges = (
+            f"`{status_icon} {issue['status']}`  "
+            f"`{priority_icon} {issue['priority']}`  "
+            f"`📋 {issue['type']}`  "
+            f"`🕒 {IssueFormatter.format_date(issue['created'])}`  "
+            f"`🔄 {IssueFormatter.format_date(issue['updated'])}`  "
+            f"`🙋 {issue['reporter']}`  "
+            f"`🕵️‍♂️ {issue['assignee']}`  "
+        )
+        
+        # Format the main content
+        return (
+            f"## [{issue['key']}] {issue['title']}\n\n"
+            f"{metadata_badges}\n\n"
+        )
+
+    @staticmethod
+    def format_issue_list(
+        issues: List[Dict[str, Any]], total: int, displayed: int
+    ) -> str:
+        """Format a list of issues as a markdown table"""
+        if not issues:
+            return "No issues found."
+
+        table = f"### Found {total} issues (showing {displayed})\n\n"
+        table += "| Key | Summary | Status | Type | Priority | Updated |\n"
+        table += "|-----|---------|--------|------|----------|--------|\n"
+
+        for issue in issues:
+            table += (
+                f"| [{issue['key']}]({issue['link']}) "
+                f"| {issue['summary']} "
+                f"| {issue['status']} "
+                f"| {issue['type']} "
+                f"| {issue['priority']} "
+                f"| {IssueFormatter.format_date(issue['updated'])} |\n"
+            )
+
+        return table
+
+    @staticmethod
+    def format_comments(issue_id: str, comments: List[Dict[str, Any]]) -> str:
+        """Format issue comments in Jira-style markdown"""
+        if not comments:
+            return ""
+
+        comment_text = f"### 💬 Comments ({len(comments)})\n\n"
+        for comment in comments:
+            # Handle HTML content in comments
+            text = comment['text']
+            if text.startswith('<') and '>' in text:
+                # Clean up HTML content for better readability
+                text = text.replace('\n', ' ')
+                # Remove excessive whitespace
+                while '  ' in text:
+                    text = text.replace('  ', ' ')
+                # Add line breaks after closing paragraph tags for better readability
+                text = text.replace('</p>', '</p>\n\n')
+            
+            # Format each comment in a more visually appealing style
+            comment_text += (
+                f"#### Comment by {comment['author']} on {IssueFormatter.format_date(comment['created'])}\n\n"
+                f"{text}\n\n"
+                "<div style='border-bottom: 1px solid #ddd; margin: 15px 0;'></div>\n\n"
+            )
+        return comment_text
 
 
 class EventEmitter:
     def __init__(self, event_emitter: Callable[[dict], Awaitable[None]]):
         self.event_emitter = event_emitter
+        self.logger = logging.getLogger("jira_tool.emitter")
 
     async def emit_status(
         self, description: str, done: bool, error: bool = False
     ) -> None:
-        """
-        Emit a status event with a description and completion status.
-
-        Args:
-            description: Text description of the status.
-            done: Whether the process is complete.
-            error: Whether an error occurred during the process.
-        """
+        """Emit a status event with a description and completion status."""
         if error and not done:
             raise ValueError("Error status must also be marked as done")
 
@@ -47,53 +156,41 @@ class EventEmitter:
                     "type": "status",
                 }
             )
-
         except Exception as e:
+            logger.error(f"Failed to emit status event: {str(e)}")
             raise RuntimeError(f"Failed to emit status event: {str(e)}") from e
 
     async def emit_message(self, content: str) -> None:
-        """
-        Emit a simple message event.
-
-        Args:
-            content: The message content to emit.
-        """
+        """Emit a simple message event."""
         if not content:
             raise ValueError("Message content cannot be empty")
 
         try:
             await self.event_emitter({"data": {"content": content}, "type": "message"})
-
         except Exception as e:
+            logger.error(f"Failed to emit message event: {str(e)}")
             raise RuntimeError(f"Failed to emit message event: {str(e)}") from e
 
     async def emit_source(
-        self, name: str, url: str, content: str, html: bool = False
+        self, name: str, url: str, content: str = "", html: bool = False
     ) -> None:
-        """
-        Emit a citation source event.
-
-        Args:
-            name: The name of the source.
-            url: The URL of the source.
-            content: The content of the citation.
-            html: Whether the content is HTML formatted.
-        """
-        if not name or not url or not content:
-            raise ValueError("Source name, URL, and content are required")
+        """Emit a citation source event."""
+        if not name or not url:
+            raise ValueError("Source name and URL are required")
 
         try:
             await self.event_emitter(
                 {
                     "type": "citation",
                     "data": {
-                        "document": [content],
+                        "document": [content] if content else [],
                         "metadata": [{"source": url, "html": html}],
                         "source": {"name": name},
                     },
                 }
             )
         except Exception as e:
+            logger.error(f"Failed to emit source event: {str(e)}")
             raise RuntimeError(f"Failed to emit source event: {str(e)}") from e
 
     async def emit_table(
@@ -102,14 +199,7 @@ class EventEmitter:
         rows: List[List[Any]],
         title: Optional[str] = "Results",
     ) -> None:
-        """
-        Emit a formatted markdown table of data.
-
-        Args:
-            headers: List of column headers for the table.
-            rows: List of rows, where each row is a list of values.
-            title: Optional title for the table, defaults to "Results".
-        """
+        """Emit a formatted markdown table of data."""
         if not headers:
             raise ValueError("Table must have at least one header")
 
@@ -130,9 +220,6 @@ class EventEmitter:
             formatted_row = [str(cell).replace("|", "\\|") for cell in row]
             table += "|" + "|".join(formatted_row) + "|\n"
 
-        table += "\n"
-
-        # Reuse the emit_message method
         await self.emit_message(table)
 
 
@@ -144,6 +231,7 @@ class JiraApiError(Exception):
 
 class Jira:
     def __init__(self, username: str, password: str, base_url: str, pat: str = ""):
+        self.logger = logging.getLogger("jira_tool.api")
         self.base_url = base_url.rstrip("/")
         self.username = username
         self.password = password
@@ -154,7 +242,11 @@ class Jira:
         }
         if self.pat:
             self.headers["Authorization"] = f"Bearer {self.pat}"
-        self.api_version = "latest"  # Using Jira API v3 by default
+        self.api_version = "latest"
+        self.logger.info(
+            f"Initialized Jira client for {self.base_url} (API version: {self.api_version})"
+        )
+        self.logger.debug(f"Using {'PAT' if self.pat else 'Basic Auth'} authentication")
 
     def _get_auth(self):
         """Return appropriate auth tuple or None based on authentication method"""
@@ -165,10 +257,15 @@ class Jira:
     def _handle_response(self, response: requests.Response, operation: str):
         """Handle API response and raise appropriate exceptions"""
         if response.status_code >= 200 and response.status_code < 300:
-            if response.content:
-                return response.json()
-            return {}
+            if not response.content:
+                return {}
 
+            try:
+                return response.json()
+            except json.JSONDecodeError as e:
+                raise JiraApiError(f"Invalid JSON response: {str(e)}") from e
+
+        # Create appropriate error message based on status code
         error_msg = f"Jira API error ({response.status_code}): {response.text}"
         if response.status_code == 401:
             error_msg = "Authentication failed. Please check your username and API key."
@@ -176,38 +273,67 @@ class Jira:
             error_msg = "You don't have permission to perform this operation."
         elif response.status_code == 404:
             error_msg = f"Resource not found while attempting to {operation}."
+        elif response.status_code == 400:
+            try:
+                error_details = response.json()
+                error_msg = f"Bad request: {error_details.get('errorMessages', ['Unknown error'])[0]}"
+            except:
+                error_msg = f"Bad request: {response.text}"
 
         raise JiraApiError(error_msg)
 
     def get(self, endpoint: str, params: Dict[str, Any] = None):
         url = f"{self.base_url}/rest/api/{self.api_version}/{endpoint}"
-        response = requests.get(
-            url,
-            params=params,
-            headers=self.headers,
-            auth=self._get_auth(),
-        )
-        return self._handle_response(response, f"get {endpoint}")
+        self.logger.info(f"GET request to {url}")
+        self.logger.debug(f"Request params: {params}")
+
+        try:
+            response = requests.get(
+                url,
+                params=params,
+                headers=self.headers,
+                auth=self._get_auth(),
+                timeout=30,
+            )
+            self.logger.debug(f"Response status: {response.status_code}")
+            return self._handle_response(response, f"get {endpoint}")
+        except requests.RequestException as e:
+            self.logger.error(
+                f"Request failed for GET {endpoint}: {str(e)}", exc_info=True
+            )
+            raise JiraApiError(f"Request failed: {str(e)}") from e
 
     def post(self, endpoint: str, data: Dict[str, Any]):
         url = f"{self.base_url}/rest/api/{self.api_version}/{endpoint}"
-        response = requests.post(
-            url,
-            json=data,
-            headers=self.headers,
-            auth=self._get_auth(),
-        )
-        return self._handle_response(response, f"post to {endpoint}")
+        self.logger.info(f"POST request to {url}")
+        self.logger.debug(f"Request data: {json.dumps(data)[:1000]}")
+
+        try:
+            response = requests.post(
+                url, json=data, headers=self.headers, auth=self._get_auth(), timeout=30
+            )
+            return self._handle_response(response, f"post to {endpoint}")
+        except requests.RequestException as e:
+            self.logger.error(
+                f"Request failed for POST {endpoint}: {str(e)}", exc_info=True
+            )
+            raise JiraApiError(f"Request failed: {str(e)}") from e
 
     def put(self, endpoint: str, data: Dict[str, Any]):
         url = f"{self.base_url}/rest/api/{self.api_version}/{endpoint}"
-        response = requests.put(
-            url,
-            json=data,
-            headers=self.headers,
-            auth=self._get_auth(),
-        )
-        return self._handle_response(response, f"update {endpoint}")
+        self.logger.info(f"PUT request to {url}")
+        self.logger.debug(f"Request data: {json.dumps(data)[:1000]}")
+
+        try:
+            response = requests.put(
+                url, json=data, headers=self.headers, auth=self._get_auth(), timeout=30
+            )
+            return self._handle_response(response, f"update {endpoint}")
+        except requests.RequestException as e:
+            self.logger.error(
+                f"Request failed for PUT {endpoint}: {str(e)}", exc_info=True
+            )
+            raise JiraApiError(f"Request failed: {str(e)}") from e
 
     def get_issue(
         self,
@@ -215,39 +341,88 @@ class Jira:
         fields: str = "summary,description,status,assignee,reporter,created,updated,priority,issuetype,project",
     ):
         """Get detailed information about a specific Jira issue"""
+        self.logger.info(f"Getting issue details for {issue_id}")
         endpoint = f"issue/{issue_id}"
-        result = self.get(
-            endpoint, {"fields": fields, "expand": "renderedFields,names"}
-        )
 
-        issue_data = {
-            "key": issue_id,
-            "title": result["fields"]["summary"],
-            "status": result["fields"]["status"]["name"],
-            "type": result["fields"]["issuetype"]["name"],
-            "project": result["fields"]["project"]["name"],
-            "priority": result["fields"].get("priority", {}).get("name", "Not set"),
-            "created": result["fields"].get("created", "Unknown"),
-            "updated": result["fields"].get("updated", "Unknown"),
-            "reporter": result["fields"]
-            .get("reporter", {})
-            .get("displayName", self.username),
-            "assignee": result["fields"]
-            .get("assignee", {})
-            .get("displayName", "Unassigned"),
-            "link": f"{self.base_url}/browse/{issue_id}",
-        }
+        try:
+            result = self.get(
+                endpoint, {"fields": fields, "expand": "renderedFields,names"}
+            )
 
-        # Handle description - might be None for some tickets
-        if result["renderedFields"].get("description"):
-            issue_data["description"] = result["renderedFields"]["description"]
-        else:
-            issue_data["description"] = "<p><em>No description provided</em></p>"
+            # Debug the response structure
+            self.logger.debug(f"Raw result type for {issue_id}: {type(result)}")
+            if result is None:
+                self.logger.error(f"API returned None result for {issue_id}")
+                raise JiraApiError(f"Empty response received for issue {issue_id}")
 
-        return issue_data
+            # Check if fields exists in result
+            if "fields" not in result:
+                self.logger.error(f"Missing 'fields' in response for {issue_id}")
+                self.logger.debug(
+                    f"Response keys: {list(result.keys()) if result else 'No keys'}"
+                )
+                raise JiraApiError(
+                    f"Invalid response structure: missing 'fields' for issue {issue_id}"
+                )
+
+            # Create a structured issue data object with proper fallbacks
+            issue_data = {
+                "key": issue_id,
+                "title": result["fields"].get("summary", "No summary"),
+                "status": (result["fields"].get("status", {}) or {}).get(
+                    "name", "Unknown"
+                ),
+                "type": (result["fields"].get("issuetype", {}) or {}).get(
+                    "name", "Unknown"
+                ),
+                "project": (result["fields"].get("project", {}) or {}).get(
+                    "name", "Unknown"
+                ),
+                "priority": (result["fields"].get("priority", {}) or {}).get(
+                    "name", "Not set"
+                ),
+                "created": IssueFormatter.format_date(result["fields"].get("created", "Unknown")),
+                "updated": IssueFormatter.format_date(result["fields"].get("updated", "Unknown")),
+                "reporter": (result["fields"].get("reporter", {}) or {}).get(
+                    "displayName", self.username
+                ),
+                "assignee": (result["fields"].get("assignee", {}) or {}).get(
+                    "displayName", "Unassigned"
+                ),
+                "link": f"{self.base_url}/browse/{issue_id}",
+            }
+
+            # Handle description with better error checking
+            description_html = None
+
+            # Try to get rendered description
+            if result.get("renderedFields") and result["renderedFields"].get(
+                "description"
+            ):
+                description_html = result["renderedFields"]["description"]
+            # If no rendered description, try raw description
+            elif result["fields"].get("description"):
+                description_html = f"<p>{result['fields']['description']}</p>"
+            else:
+                description_html = "<p><em>No description provided</em></p>"
+
+            issue_data["description"] = description_html
+
+            self.logger.debug(f"Successfully retrieved issue {issue_id}")
+            return issue_data
+
+        except KeyError as e:
+            self.logger.error(
+                f"Missing field in issue response: {str(e)}", exc_info=True
+            )
+            self.logger.debug(
+                f"Response structure: {json.dumps(result)[:500] if result else 'None'}"
+            )
+            raise JiraApiError(f"Invalid response structure: missing {str(e)}") from e
 
     def search(self, query: str, max_results: int = 10):
         """Search for Jira issues using JQL or free text"""
+        self.logger.info(f"Searching issues with query: {query}")
         endpoint = "search"
 
         # Determine if the query is already JQL or needs conversion
@@ -256,6 +431,7 @@ class Jira:
             for operator in ["=", "~", ">", "<", " AND ", " OR ", " ORDER BY "]
         ):
             jql = query
+            self.logger.debug("Query appears to be JQL")
         else:
             # Convert free text to JQL
             terms = query.split()
@@ -264,6 +440,7 @@ class Jira:
             else:
                 cql_terms = f'text ~ "{query}"'
             jql = cql_terms
+            self.logger.debug(f"Converted free text to JQL: {jql}")
 
         params = {
             "jql": jql,
@@ -273,54 +450,76 @@ class Jira:
         raw_response = self.get(endpoint, params)
 
         issues = []
-        for item in raw_response["issues"]:
-            issues.append(
-                {
-                    "key": item["key"],
-                    "summary": item["fields"]["summary"],
-                    "status": item["fields"]["status"]["name"],
-                    "type": item["fields"]["issuetype"]["name"],
-                    "priority": item["fields"]
-                    .get("priority", {})
-                    .get("name", "Not set"),
-                    "updated": item["fields"].get("updated", "Unknown"),
-                    "link": f"{self.base_url}/browse/{item['key']}",
-                }
-            )
+        for item in raw_response.get("issues", []):
+            try:
+                issues.append(
+                    {
+                        "key": item["key"],
+                        "summary": item["fields"].get("summary", "No summary"),
+                        "status": item["fields"]
+                        .get("status", {})
+                        .get("name", "Unknown"),
+                        "type": item["fields"]
+                        .get("issuetype", {})
+                        .get("name", "Unknown"),
+                        "priority": item["fields"]
+                        .get("priority", {})
+                        .get("name", "Not set"),
+                        "updated": item["fields"].get("updated", "Unknown"),
+                        "link": f"{self.base_url}/browse/{item['key']}",
+                    }
+                )
+            except KeyError as e:
+                self.logger.warning(f"Missing field in search result item: {e}")
+                # Continue processing other results rather than failing completely
 
         return {
             "issues": issues,
-            "total": raw_response["total"],
+            "total": raw_response.get("total", 0),
             "displayed": len(issues),
         }
 
     def get_projects(self):
         """Get a list of available projects"""
+        self.logger.info("Getting list of projects")
         endpoint = "project"
         result = self.get(endpoint)
 
         projects = []
         for item in result:
-            projects.append(
-                {"key": item["key"], "name": item["name"], "id": item["id"]}
-            )
+            try:
+                projects.append(
+                    {"key": item["key"], "name": item["name"], "id": item["id"]}
+                )
+            except KeyError as e:
+                self.logger.warning(f"Missing field in project: {e}")
 
+        self.logger.debug(f"Retrieved {len(projects)} projects")
         return projects
 
     def get_issue_types(self, project_key: str = None):
         """Get available issue types, optionally filtered by project"""
-        if project_key:
-            endpoint = f"project/{project_key}"
-            result = self.get(endpoint)
-            issue_types = result.get("issueTypes", [])
-        else:
-            endpoint = "issuetype"
-            issue_types = self.get(endpoint)
+        self.logger.info(
+            f"Getting issue types{' for project ' + project_key if project_key else ''}"
+        )
 
-        return [{"id": it["id"], "name": it["name"]} for it in issue_types]
+        try:
+            if project_key:
+                endpoint = f"project/{project_key}"
+                result = self.get(endpoint)
+                issue_types = result.get("issueTypes", [])
+            else:
+                endpoint = "issuetype"
+                issue_types = self.get(endpoint)
+
+            return [{"id": it["id"], "name": it["name"]} for it in issue_types]
+        except Exception as e:
+            self.logger.error(f"Error getting issue types: {str(e)}", exc_info=True)
+            raise JiraApiError(f"Failed to retrieve issue types: {str(e)}") from e
 
     def get_priorities(self):
         """Get available priorities"""
+        self.logger.info("Getting list of priorities")
         endpoint = "priority"
         priorities = self.get(endpoint)
         return [{"id": p["id"], "name": p["name"]} for p in priorities]
@@ -334,10 +533,15 @@ class Jira:
         priority: str = None,
     ):
         """Create a new Jira issue"""
+        self.logger.info(f"Creating new issue in project {project_key}")
         endpoint = "issue"
         default_issue_type = "Task"
         if not issue_type:
             issue_type = default_issue_type
+            self.logger.debug(
+                f"No issue type provided, using default: {default_issue_type}"
+            )
+
         # Build the issue fields
         issue_data = {
             "fields": {
@@ -352,6 +556,7 @@ class Jira:
         if priority:
             issue_data["fields"]["priority"] = {"name": priority}
 
+        self.logger.debug(f"Creating issue with data: {json.dumps(issue_data)}")
         result = self.post(endpoint, issue_data)
 
         return {
@@ -362,59 +567,102 @@ class Jira:
 
     def add_comment(self, issue_id: str, comment: str):
         """Add a comment to an existing issue"""
+        self.logger.info(f"Adding comment to issue {issue_id}")
         endpoint = f"issue/{issue_id}/comment"
 
-        comment_data = {
-            "body": {
-                "type": "doc",
-                "version": 1,
-                "content": [
-                    {
-                        "type": "paragraph",
-                        "content": [{"type": "text", "text": comment}],
-                    }
-                ],
+        # Handle API versions and create appropriate comment structure
+        try:
+            # For newer Jira Cloud API
+            comment_data = {
+                "body": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [{"type": "text", "text": comment}],
+                        }
+                    ],
+                }
             }
-        }
-
-        result = self.post(endpoint, comment_data)
-
-        return {
-            "id": result["id"],
-            "created": result["created"],
-            "issue_link": f"{self.base_url}/browse/{issue_id}",
-        }
+            self.logger.debug("Attempting comment with Atlassian Document Format")
+            result = self.post(endpoint, comment_data)
+            return {
+                "id": result["id"],
+                "created": result["created"],
+                "issue_link": f"{self.base_url}/browse/{issue_id}",
+            }
+        except JiraApiError as e:
+            # If ADF format fails, try legacy format
+            if "400" in str(e):
+                self.logger.info("ADF format failed, trying legacy comment format")
+                comment_data = {"body": comment}
+                result = self.post(endpoint, comment_data)
+                return {
+                    "id": result["id"],
+                    "created": result["created"],
+                    "issue_link": f"{self.base_url}/browse/{issue_id}",
+                }
+            else:
+                raise
 
     def get_comments(self, issue_id: str):
         """Get comments for an issue"""
+        self.logger.info(f"Getting comments for issue {issue_id}")
         endpoint = f"issue/{issue_id}/comment"
-        result = self.get(endpoint)
 
-        comments = []
-        for comment in result.get("comments", []):
-            # Extract text from the document structure
-            text = ""
-            if "body" in comment and "content" in comment["body"]:
-                for content in comment["body"]["content"]:
-                    if "content" in content:
-                        for text_content in content["content"]:
-                            if "text" in text_content:
-                                text += text_content["text"]
+        try:
+            result = self.get(endpoint)
+            self.logger.debug(f"Retrieved {len(result.get('comments', []))} comments")
 
-            comments.append(
-                {
-                    "id": comment["id"],
-                    "author": comment.get("author", {}).get("displayName", "Unknown"),
-                    "created": comment.get("created", "Unknown"),
-                    "updated": comment.get("updated", "Unknown"),
-                    "text": text,
-                }
-            )
+            comments = []
+            for comment in result.get("comments", []):
+                # Handle different comment formats
+                text = ""
 
-        return comments
+                # Try to extract from ADF format
+                if (
+                    "body" in comment
+                    and isinstance(comment["body"], dict)
+                    and "content" in comment["body"]
+                ):
+                    try:
+                        for content in comment["body"]["content"]:
+                            if "content" in content:
+                                for text_content in content["content"]:
+                                    if "text" in text_content:
+                                        text += text_content["text"]
+                    except (KeyError, TypeError) as e:
+                        self.logger.warning(f"Error parsing ADF comment: {e}")
+
+                # Try legacy format if ADF extraction yields nothing
+                if not text and isinstance(comment.get("body"), str):
+                    text = comment["body"]
+
+                # If still no text, use a placeholder
+                if not text:
+                    text = "[Comment format not supported]"
+
+                comments.append(
+                    {
+                        "id": comment["id"],
+                        "author": comment.get("author", {}).get(
+                            "displayName", "Unknown"
+                        ),
+                        "created": comment.get("created", "Unknown"),
+                        "updated": comment.get("updated", "Unknown"),
+                        "text": text,
+                    }
+                )
+
+            return comments
+        except Exception as e:
+            self.logger.error(f"Error getting comments: {str(e)}", exc_info=True)
+            raise JiraApiError(f"Failed to retrieve comments: {str(e)}") from e
 
     def assign_issue(self, issue_id: str, assignee: str):
         """Assign an issue to a user"""
+        self.logger.info(f"Assigning issue {issue_id} to {assignee or 'Unassigned'}")
         endpoint = f"issue/{issue_id}/assignee"
 
         # Handle special case for unassigning
@@ -437,30 +685,43 @@ class Jira:
         """
         Update the status of an issue using either transition ID or name
         """
+        self.logger.info(
+            f"Updating status of issue {issue_id} using {'ID' if transition_id else 'name'} {transition_id or transition_name}"
+        )
+
         if not (transition_id or transition_name):
             raise ValueError("Either transition_id or transition_name must be provided")
 
         # First, get available transitions
         transitions_endpoint = f"issue/{issue_id}/transitions"
         transitions = self.get(transitions_endpoint)
+        self.logger.debug(
+            f"Available transitions: {', '.join([t['name'] for t in transitions.get('transitions', [])])}"
+        )
 
         transition_to_use = None
 
         # Find the transition by ID or name
         if transition_id:
-            for t in transitions["transitions"]:
+            for t in transitions.get("transitions", []):
                 if t["id"] == transition_id:
                     transition_to_use = t["id"]
                     break
         elif transition_name:
-            for t in transitions["transitions"]:
+            for t in transitions.get("transitions", []):
                 if t["name"].lower() == transition_name.lower():
                     transition_to_use = t["id"]
                     break
 
         if not transition_to_use:
             available_transitions = ", ".join(
-                [f"{t['name']} (ID: {t['id']})" for t in transitions["transitions"]]
+                [
+                    f"{t['name']} (ID: {t['id']})"
+                    for t in transitions.get("transitions", [])
+                ]
+            )
+            self.logger.error(
+                f"Transition {transition_id or transition_name} not found. Available: {available_transitions}"
             )
             raise JiraApiError(
                 f"Transition not found. Available transitions: {available_transitions}"
@@ -481,22 +742,24 @@ class Jira:
 
     def get_available_transitions(self, issue_id: str):
         """Get available status transitions for an issue"""
+        self.logger.info(f"Getting available transitions for issue {issue_id}")
         transitions_endpoint = f"issue/{issue_id}/transitions"
         transitions = self.get(transitions_endpoint)
 
         return [
             {"id": t["id"], "name": t["name"], "to_status": t["to"]["name"]}
-            for t in transitions["transitions"]
+            for t in transitions.get("transitions", [])
         ]
 
 
 class Tools:
     def __init__(self):
+        self.logger = logging.getLogger("jira_tool.tools")
         self.valves = self.Valves()
 
     class Valves(BaseModel):
         username: str = Field(
-            "", description="Your Jira username (required for Cloud, not needed for Data Center PAT)"
+            "", description="Your Jira username or email (leave empty if using PAT)"
         )
         password: str = Field(
             "", description="Your Jira password (leave empty if using PAT)"
@@ -549,62 +812,50 @@ class Tools:
         __event_emitter__: Callable[[dict], Awaitable[None]],
         __user__: dict = {},
     ):
-        """
-        Get detailed information about a Jira issue by its ID.
-
-        :param issue_id: The ID of the issue (e.g., PROJECT-123)
-        :return: Comprehensive issue details including title, status, description, and more
-        """
+        """Get detailed information about a Jira issue by its ID."""
         event_emitter = EventEmitter(__event_emitter__)
 
         try:
             await event_emitter.emit_status(f"Retrieving Jira issue {issue_id}", False)
-
             jira = self._get_jira_client()
-            issue = jira.get_issue(issue_id)
 
-            # Format and emit issue information
-            issue_card = f"""
-### 📩 {issue['key']}: {issue['title']}
+            try:
+                # Get issue data
+                issue = jira.get_issue(issue_id)
 
-**Status:** {issue['status']}  
-**Type:** {issue['type']}  
-**Priority:** {issue['priority']}  
-**Project:** {issue['project']}  
+                # Format issue as markdown table
+                issue_markdown = IssueFormatter.format_issue_details(issue)
+                await event_emitter.emit_message(issue_markdown)
 
-**Created:** {issue['created']}  
-**Updated:** {issue['updated']}  
-**Reporter:** {issue['reporter']}  
-**Assignee:** {issue['assignee']}  
+                # Add source citation
+                await event_emitter.emit_source(issue["title"], issue["link"])
 
-**Link:** [{issue['key']}]({issue['link']})
-"""
-            await event_emitter.emit_message(issue_card)
-            await event_emitter.emit_source(
-                f"Description of {issue['key']}",
-                issue["link"],
-                issue["description"],
-                True,
-            )
+                # Get and format comments if any
+                comments = jira.get_comments(issue_id)
+                if comments:
+                    comment_markdown = IssueFormatter.format_comments(
+                        issue_id, comments
+                    )
+                    await event_emitter.emit_message(comment_markdown)
 
-            # Get comments
-            comments = jira.get_comments(issue_id)
-            if comments:
-                comment_text = f"### 💬 Comments on {issue_id} ({len(comments)})\n\n"
-                for i, comment in enumerate(comments):
-                    comment_text += f"**{i+1}. {comment['author']}** - {comment['created']}\n{comment['text']}\n\n"
-                await event_emitter.emit_message(comment_text)
+                await event_emitter.emit_status(
+                    f"Successfully retrieved Jira issue {issue_id}", True
+                )
 
-            await event_emitter.emit_status(
-                f"Successfully retrieved Jira issue {issue_id}", True
-            )
-            return json.dumps(issue)
+                # Return nothing to avoid duplicate message
+                return "Success"
+
+            except JiraApiError as e:
+                await event_emitter.emit_status(
+                    f"Failed to get issue {issue_id}: {str(e)}", True, True
+                )
+                return None
 
         except Exception as e:
             await event_emitter.emit_status(
                 f"Failed to get issue {issue_id}: {str(e)}", True, True
             )
-            return f"Error: {str(e)}"
+            return None
 
     async def search_issues(
         self,
@@ -613,19 +864,11 @@ class Tools:
         max_results: int = 10,
         __user__: dict = {},
     ):
-        """
-        Search for Jira issues using JQL or free text.
-
-        :param query: JQL query string or free text search
-                     (e.g., "project = DEMO AND status = Open", or "login bug")
-        :param max_results: Maximum number of results to return (default: 10)
-        :return: List of matching issues
-        """
+        """Search for Jira issues using JQL or free text."""
         event_emitter = EventEmitter(__event_emitter__)
 
         try:
             await event_emitter.emit_status(f"Searching Jira for: {query}", False)
-
             jira = self._get_jira_client()
             results = jira.search(query, max_results)
 
@@ -633,40 +876,26 @@ class Tools:
                 await event_emitter.emit_status(
                     f"No issues found matching: {query}", True
                 )
-                return json.dumps({"message": "No issues found", "total": 0})
+                return None
 
-            # Format results as a table
-            headers = ["Key", "Summary", "Status", "Type", "Priority", "Updated"]
-            rows = []
-            for issue in results["issues"]:
-                rows.append(
-                    [
-                        f"[{issue['key']}]({issue['link']})",
-                        issue["summary"],
-                        issue["status"],
-                        issue["type"],
-                        issue["priority"],
-                        issue["updated"],
-                    ]
-                )
-
-            await event_emitter.emit_table(
-                headers,
-                rows,
-                f"Found {results['total']} issues (showing {results['displayed']})",
+            # Format results using the IssueFormatter
+            table_markdown = IssueFormatter.format_issue_list(
+                results["issues"], results["total"], results["displayed"]
             )
+            await event_emitter.emit_message(table_markdown)
 
             await event_emitter.emit_status(
                 f"Found {results['total']} issues matching your query", True
             )
 
-            return json.dumps(results)
+            # Return nothing to avoid duplicate message
+            return "Successfully retrieved issues"
 
         except Exception as e:
             await event_emitter.emit_status(
                 f"Failed to search issues: {str(e)}", True, True
             )
-            return f"Error: {str(e)}"
+            return None
 
     async def create_issue(
         self,
@@ -678,16 +907,7 @@ class Tools:
         priority: str = None,
         __user__: dict = {},
     ):
-        """
-        Create a new Jira issue.
-
-        :param project_key: The project key (e.g., DEMO)
-        :param summary: The issue summary/title
-        :param description: The issue description
-        :param issue_type: The type of issue (e.g., Bug, Task, Story)
-        :param priority: The priority level (e.g., High, Medium, Low)
-        :return: Details of the created issue
-        """
+        """Create a new Jira issue."""
         event_emitter = EventEmitter(__event_emitter__)
 
         try:
@@ -700,238 +920,32 @@ class Tools:
                 project_key, summary, description, issue_type, priority
             )
 
-            # Get full issue details to return
-            print(result)
+            # Get current time for creation timestamp
+            from datetime import datetime
+            creation_time = datetime.now().strftime("%b %d, %Y %I:%M %p")
+            
+            # Format success message as a table for consistency
             success_message = f"""
 ### ✅ Issue Created Successfully
 
-**Key:** {result['key']}
-**Summary:** {summary}  
-**Type:** {issue_type}  
-**Project:** {project_key}  
-                """
+| Attribute | Value |
+|-----------|-------|
+| Key | [{result['key']}]({result['link']}) |
+| Summary | {summary} |
+| Type | {issue_type} |
+| Project | {project_key} |
+| Created | {creation_time} |
+"""
             await event_emitter.emit_message(success_message)
             await event_emitter.emit_status(
                 f"Successfully created issue {result['key']}", True
             )
 
-            return success_message
+            # Return nothing to avoid duplicate message
+            return f"Successfully created issue {result['key']}"
 
         except Exception as e:
             await event_emitter.emit_status(
                 f"Failed to create issue: {str(e)}", True, True
             )
-            return f"Error: {str(e)}"
-
-    async def add_comment(
-        self,
-        issue_id: str,
-        comment: str,
-        __event_emitter__: Callable[[dict], Awaitable[None]],
-        __user__: dict = {},
-    ):
-        """
-        Add a comment to an existing Jira issue.
-
-        :param issue_id: The ID of the issue (e.g., PROJECT-123)
-        :param comment: The comment text to add
-        :return: Comment details
-        """
-        event_emitter = EventEmitter(__event_emitter__)
-
-        try:
-            await event_emitter.emit_status(f"Adding comment to {issue_id}", False)
-
-            jira = self._get_jira_client()
-            result = jira.add_comment(issue_id, comment)
-
-            confirmation = f"""
-### 💬 Comment Added
-
-Successfully added a comment to [{issue_id}]({result['issue_link']}).  
-**Added at:** {result['created']}
-"""
-            await event_emitter.emit_message(confirmation)
-            await event_emitter.emit_status(f"Comment added to {issue_id}", True)
-
-            return json.dumps(result)
-
-        except Exception as e:
-            await event_emitter.emit_status(
-                f"Failed to add comment: {str(e)}", True, True
-            )
-            return f"Error: {str(e)}"
-
-    async def assign_issue(
-        self,
-        issue_id: str,
-        assignee: str,
-        __event_emitter__: Callable[[dict], Awaitable[None]],
-        __user__: dict = {},
-    ):
-        """
-        Assign a Jira issue to a user.
-
-        :param issue_id: The ID of the issue (e.g., PROJECT-123)
-        :param assignee: Username of the assignee (use "Unassigned" to unassign)
-        :return: Assignment details
-        """
-        event_emitter = EventEmitter(__event_emitter__)
-
-        try:
-            await event_emitter.emit_status(
-                f"Assigning {issue_id} to {assignee}", False
-            )
-
-            jira = self._get_jira_client()
-            result = jira.assign_issue(issue_id, assignee)
-
-            confirmation = f"""
-### 👤 Issue Assignment Updated
-
-Issue [{issue_id}]({result['link']}) has been assigned to **{result['assignee']}**.
-"""
-            await event_emitter.emit_message(confirmation)
-            await event_emitter.emit_status(f"Successfully assigned {issue_id}", True)
-
-            return json.dumps(result)
-
-        except Exception as e:
-            await event_emitter.emit_status(
-                f"Failed to assign issue: {str(e)}", True, True
-            )
-            return f"Error: {str(e)}"
-
-    async def update_status(
-        self,
-        issue_id: str,
-        status: str,
-        __event_emitter__: Callable[[dict], Awaitable[None]],
-        __user__: dict = {},
-    ):
-        """
-        Update the status of a Jira issue.
-
-        :param issue_id: The ID of the issue (e.g., PROJECT-123)
-        :param status: The new status or transition name (e.g., "In Progress", "Done")
-        :return: Updated status details
-        """
-        event_emitter = EventEmitter(__event_emitter__)
-
-        try:
-            await event_emitter.emit_status(
-                f"Updating {issue_id} status to '{status}'", False
-            )
-
-            jira = self._get_jira_client()
-
-            # Get available transitions first
-            await event_emitter.emit_status(
-                f"Checking available transitions for {issue_id}", False
-            )
-            transitions = jira.get_available_transitions(issue_id)
-
-            # Try to find transition by name
-            result = jira.update_issue_status(issue_id, transition_name=status)
-
-            confirmation = f"""
-### 🔄 Issue Status Updated
-
-Issue [{issue_id}]({result['link']}) status has been changed to **{result['new_status']}**.
-"""
-            await event_emitter.emit_message(confirmation)
-            await event_emitter.emit_status(
-                f"Successfully updated {issue_id} status", True
-            )
-
-            return json.dumps(result)
-
-        except Exception as e:
-            error_message = str(e)
-            await event_emitter.emit_status(
-                f"Failed to update status: {error_message}", True, True
-            )
-            return f"Error: {error_message}"
-
-    async def list_projects(
-        self,
-        __event_emitter__: Callable[[dict], Awaitable[None]],
-        __user__: dict = {},
-    ):
-        """
-        List available Jira projects.
-
-        :return: List of projects with their keys and names
-        """
-        event_emitter = EventEmitter(__event_emitter__)
-
-        try:
-            await event_emitter.emit_status("Retrieving Jira projects", False)
-
-            jira = self._get_jira_client()
-            projects = jira.get_projects()
-
-            # Format as table
-            headers = ["Key", "Name", "ID"]
-            rows = [[p["key"], p["name"], p["id"]] for p in projects]
-
-            await event_emitter.emit_table(
-                headers, rows, f"Available Jira Projects ({len(projects)})"
-            )
-            await event_emitter.emit_status(f"Retrieved {len(projects)} projects", True)
-
-            return json.dumps(projects)
-
-        except Exception as e:
-            await event_emitter.emit_status(
-                f"Failed to list projects: {str(e)}", True, True
-            )
-            return f"Error: {str(e)}"
-
-    async def get_issue_metadata(
-        self,
-        __event_emitter__: Callable[[dict], Awaitable[None]],
-        project_key: str = None,
-        __user__: dict = {},
-    ):
-        """
-        Get metadata for issue creation (issue types, priorities).
-
-        :param project_key: Optional project key to get specific issue types
-        :return: Available issue types and priorities
-        """
-        event_emitter = EventEmitter(__event_emitter__)
-
-        try:
-            await event_emitter.emit_status("Retrieving Jira metadata", False)
-
-            jira = self._get_jira_client()
-
-            # Get issue types
-            issue_types = jira.get_issue_types(project_key)
-
-            # Get priorities
-            priorities = jira.get_priorities()
-
-            # Format as tables
-            await event_emitter.emit_table(
-                ["ID", "Name"],
-                [[t["id"], t["name"]] for t in issue_types],
-                f"Available Issue Types{' for ' + project_key if project_key else ''}",
-            )
-
-            await event_emitter.emit_table(
-                ["ID", "Name"],
-                [[p["id"], p["name"]] for p in priorities],
-                "Available Priorities",
-            )
-
-            await event_emitter.emit_status("Successfully retrieved metadata", True)
-
-            return json.dumps({"issue_types": issue_types, "priorities": priorities})
-
-        except Exception as e:
-            await event_emitter.emit_status(
-                f"Failed to get metadata: {str(e)}", True, True
-            )
-            return f"Error: {str(e)}"
+            return None
