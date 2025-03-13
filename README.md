@@ -13,6 +13,8 @@ A comprehensive tool for interacting with Jira - search, view, create, and comme
 - 📂 **List Projects**: Retrieve available project details.
 - 📊 **Get Issue Metadata**: Fetch available issue types and priorities.
 
+<img width="1344" alt="image" src="https://github.com/user-attachments/assets/ee3d9f03-770e-452a-8ab7-2a2834681e35" />
+
 ## Usage
 
 To use this tool, configure your Jira credentials:
