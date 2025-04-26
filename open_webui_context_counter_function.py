@@ -5,7 +5,7 @@ author_url: https://github.com/taylorwilsdon
 version: 0.1
 license: MIT
 requirements: tiktoken
-description: Performant, lightweight context window tracker for Open-WebUI built with minimal latency in mind
+description: Performant, lightweight context window tracker built with minimal latency in mind 
 """
 from __future__ import annotations
 
