@@ -2,13 +2,17 @@
 
 A collection of extensions and agents to enhance your Open-WebUI experience. This repository contains:
 
-- **Chat Context Window Tracker**  
+- **Chat Context Window & Turns Tracker**  
   A high-throughput, low-latency filter that monitors token usage and conversation turns.  
   ▶️ See [Open-WebUI Context Counter & Turn Tracker Function README](README_OPEN_WEBUI_CONTEXT_COUNTER_FUNCTION.md)
 
 - **Jira Agent**  
   Search, view, create, comment on, and manage Jira issues directly from Open-WebUI.  
   ▶️ See [Open-WebUI Jira Agent README](README_JIRA.md)
+
+- **Open WebUI PostgreSQL Migration Tool**  
+  Search, view, create, comment on, and manage Jira issues directly from Open-WebUI.  
+  ▶️ See [Open WebUI PostgreSQL Migration Tool README](https://github.com/taylorwilsdon/open-webui-postgres-migration/blob/main/README.md)
 
 ---
 
