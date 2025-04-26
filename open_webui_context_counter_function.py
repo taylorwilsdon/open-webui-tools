@@ -128,6 +128,11 @@ class Filter:
         bar_length: int = Field(default=5)
         warn_at_percentage: float = Field(default=75.0)
         critical_at_percentage: float = Field(default=90.0)
+        # Turn counting config
+        max_turns: int = Field(default=8, description="Maximum conversation turns before warning.")
+        turn_warn_at_percentage: float = Field(default=75.0, description="Percentage of max turns to trigger a warning.")
+        turn_critical_at_percentage: float = Field(default=90.0, description="Percentage of max turns to trigger a critical warning.")
+        show_turn_status: bool = Field(default=True, description="Show turn count in status.")
 
     class UserValves(BaseModel):
         enabled: bool = Field(default=True)
@@ -256,32 +261,48 @@ class Filter:
             input_tokens = total - output
 
             limit = self._get_context_size(model_id)
-            pct = 100.0 * total / limit if limit else 0.0
+            token_pct = 100.0 * total / limit if limit else 0.0
 
-            prefix = (
-                "CRIT:" if pct >= self.valves.critical_at_percentage
-                else "WARN:" if pct >= self.valves.warn_at_percentage
+            token_prefix = (
+                "Critical:" if token_pct >= self.valves.critical_at_percentage
+                else "Warning:" if token_pct >= self.valves.warn_at_percentage
                 else ""
             )
 
-            bar = (
-                _build_bar(int(self.valves.bar_length * pct / 100), self.valves.bar_length)
+            # Calculate turns
+            current_turns = len(msgs) // 2  # Each turn is user + assistant
+            max_turns = self.valves.max_turns
+            turn_pct = 100.0 * current_turns / max_turns if max_turns > 0 else 0.0
+
+            turn_prefix = (
+                "Critical:" if turn_pct >= self.valves.turn_critical_at_percentage
+                else "Warning:" if turn_pct >= self.valves.turn_warn_at_percentage
+                else ""
+            ) if self.valves.show_turn_status else ""
+
+            turn_status = (
+                f"{turn_prefix}Turns: {current_turns}/{max_turns}"
+                if self.valves.show_turn_status else ""
+            )
+
+            token_bar = (
+                _build_bar(int(self.valves.bar_length * token_pct / 100), self.valves.bar_length)
                 if self.valves.show_progress_bar
                 else ""
             )
 
-            status = " | ".join(
-                p for p in (
-                    prefix,
-                    f"Tokens: {_format_number(total)}/{_format_number(limit)} ({pct:.1f}%)",
-                    bar,
-                    f"{_format_number(input_tokens)}/{_format_number(output)}",
-                ) if p
-            )
+            status_parts = [
+                f"{token_prefix}Context: {_format_number(total)}/{_format_number(limit)} ({token_pct:.1f}%)",
+                token_bar,
+                f"Input: {_format_number(input_tokens)} - Output: {_format_number(output)}",
+                turn_status,
+            ]
+            status = " | ".join(p for p in status_parts if p)
+
 
             logger.debug(
-                "Context %s/%s tokens (%.1f%%) | model=%s",
-                total, limit, pct, model_id,
+                "Context %s/%s tokens (%.1f%%) | Turns %s/%s | model=%s",
+                total, limit, token_pct, current_turns, max_turns, model_id,
             )
 
             if self.valves.show_status:
