@@ -4,11 +4,11 @@ A collection of extensions and agents to enhance your Open-WebUI experience. Thi
 
 - **Chat Context Window Tracker**  
   A high-throughput, low-latency filter that monitors token usage and conversation turns.  
-  ▶️ See [README_OPEN_WEBUI_CONTEXT_COUNTER_FUNCTION.md](Open-WebUI Context Counter & Turn Tracker Function README)
+  ▶️ See [Open-WebUI Context Counter & Turn Tracker Function README](README_OPEN_WEBUI_CONTEXT_COUNTER_FUNCTION.md)
 
 - **Jira Agent**  
   Search, view, create, comment on, and manage Jira issues directly from Open-WebUI.  
-  ▶️ See [README_JIRA.md](Open-WebUI Jira Agent README)
+  ▶️ See [Open-WebUI Jira Agent README](README_JIRA.md)
 
 ---
 
