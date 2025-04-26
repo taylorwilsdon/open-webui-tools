@@ -1,8 +1,7 @@
 """
 title: Chat Context Window Tracking for Open-WebUI
 author: Taylor Wilsdon
-author_url: https://github.com/open-webui
-funding_url: https://github.com/open-webui
+author_url: https://github.com/taylorwilsdon
 version: 0.1
 license: MIT
 requirements: tiktoken
