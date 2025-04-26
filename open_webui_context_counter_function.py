@@ -29,7 +29,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("StandardContextCounter")
 
-PROGRESS_CHARS = ["⬡", "⬢"]
 DEFAULT_FALLBACK_CONTEXT_SIZE = 4096
 HARD_CODED_CONTEXTS = {
     "gpt-4o": 128000,
@@ -61,7 +60,7 @@ HARD_CODED_CONTEXTS = {
 }
 
 _K, _M = 1_000, 1_000_000
-
+INDICATORS = ["⬡", "⬢"]
 
 def _sha1(text: str) -> str:
     return hashlib.sha1(text.encode(), usedforsecurity=False).hexdigest()
@@ -76,7 +75,7 @@ def _format_number(num: int) -> str:
 
 
 def _build_bar(filled: int, total: int) -> str:
-    return "[" + PROGRESS_CHARS[1] * filled + PROGRESS_CHARS[0] * (total - filled) + "]"
+    return "[" + INDICATORS[1] * filled + INDICATORS[0] * (total - filled) + "]"
 
 
 @functools.lru_cache(maxsize=256)
