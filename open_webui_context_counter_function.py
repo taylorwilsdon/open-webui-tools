@@ -5,8 +5,9 @@ author_url: https://github.com/taylorwilsdon
 version: 0.1.1
 license: MIT
 requirements: tiktoken
-description: Performant, lightweight context window tracker built with minimal latency in mind 
+description: Performant, lightweight context window tracker built with minimal latency in mind
 """
+
 from __future__ import annotations
 
 import functools
@@ -58,6 +59,7 @@ HARD_CODED_CONTEXTS = {
 
 _K, _M = 1_000, 1_000_000
 INDICATORS = ["⬡", "⬢"]
+
 
 def _sha1(text: str) -> str:
     return hashlib.sha1(text.encode(), usedforsecurity=False).hexdigest()
@@ -129,10 +131,19 @@ class Filter:
         warn_at_percentage: float = Field(default=75.0)
         critical_at_percentage: float = Field(default=90.0)
         # Turn counting config
-        max_turns: int = Field(default=8, description="Maximum conversation turns before warning.")
-        turn_warn_at_percentage: float = Field(default=75.0, description="Percentage of max turns to trigger a warning.")
-        turn_critical_at_percentage: float = Field(default=90.0, description="Percentage of max turns to trigger a critical warning.")
-        show_turn_status: bool = Field(default=True, description="Show turn count in status.")
+        max_turns: int = Field(
+            default=8, description="Maximum conversation turns before warning."
+        )
+        turn_warn_at_percentage: float = Field(
+            default=75.0, description="Percentage of max turns to trigger a warning."
+        )
+        turn_critical_at_percentage: float = Field(
+            default=90.0,
+            description="Percentage of max turns to trigger a critical warning.",
+        )
+        show_turn_status: bool = Field(
+            default=True, description="Show turn count in status."
+        )
 
     class UserValves(BaseModel):
         enabled: bool = Field(default=True)
@@ -249,7 +260,9 @@ class Filter:
                 text = m.get("content") or ""
                 if isinstance(text, list):  # vision messages
                     text = "\n".join(
-                        item.get("text", "") for item in text if item.get("type") == "text"
+                        item.get("text", "")
+                        for item in text
+                        if item.get("type") == "text"
                     )
                 all_texts.append(text)
                 if m.get("role") == "assistant":
@@ -264,9 +277,9 @@ class Filter:
             token_pct = 100.0 * total / limit if limit else 0.0
 
             token_prefix = (
-                "Critical:" if token_pct >= self.valves.critical_at_percentage
-                else "Warning:" if token_pct >= self.valves.warn_at_percentage
-                else ""
+                "CRIT:"
+                if token_pct >= self.valves.critical_at_percentage
+                else "WARN:" if token_pct >= self.valves.warn_at_percentage else ""
             )
 
             # Calculate turns
@@ -275,34 +288,50 @@ class Filter:
             turn_pct = 100.0 * current_turns / max_turns if max_turns > 0 else 0.0
 
             turn_prefix = (
-                "Critical:" if turn_pct >= self.valves.turn_critical_at_percentage
-                else "Warning:" if turn_pct >= self.valves.turn_warn_at_percentage
+                (
+                    "CRIT:"
+                    if turn_pct >= self.valves.turn_critical_at_percentage
+                    else (
+                        "WARN:"
+                        if turn_pct >= self.valves.turn_warn_at_percentage
+                        else ""
+                    )
+                )
+                if self.valves.show_turn_status
                 else ""
-            ) if self.valves.show_turn_status else ""
+            )
 
             turn_status = (
                 f"{turn_prefix}Turns: {current_turns}/{max_turns}"
-                if self.valves.show_turn_status else ""
+                if self.valves.show_turn_status
+                else ""
             )
 
             token_bar = (
-                _build_bar(int(self.valves.bar_length * token_pct / 100), self.valves.bar_length)
+                _build_bar(
+                    int(self.valves.bar_length * token_pct / 100),
+                    self.valves.bar_length,
+                )
                 if self.valves.show_progress_bar
                 else ""
             )
 
             status_parts = [
-                f"{token_prefix}Context: {_format_number(total)}/{_format_number(limit)} ({token_pct:.1f}%)",
+                f"{token_prefix}Tokens: {_format_number(total)}/{_format_number(limit)} ({token_pct:.1f}%)",
                 token_bar,
                 f"Input: {_format_number(input_tokens)} - Output: {_format_number(output)}",
                 turn_status,
             ]
             status = " | ".join(p for p in status_parts if p)
 
-
             logger.debug(
                 "Context %s/%s tokens (%.1f%%) | Turns %s/%s | model=%s",
-                total, limit, token_pct, current_turns, max_turns, model_id,
+                total,
+                limit,
+                token_pct,
+                current_turns,
+                max_turns,
+                model_id,
             )
 
             if self.valves.show_status:
@@ -317,7 +346,10 @@ class Filter:
                     await __event_emitter__(
                         {
                             "type": "status",
-                            "data": {"description": "Error calculating context", "done": True},
+                            "data": {
+                                "description": "Error calculating context",
+                                "done": True,
+                            },
                         }
                     )
                 except Exception:
